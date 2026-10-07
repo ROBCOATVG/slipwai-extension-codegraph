@@ -18,6 +18,7 @@
         "converge"
       ],
       "budget": "30s"
-    }
+    },
+    "check": "hooks/check.py"
   }
 }
