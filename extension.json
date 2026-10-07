@@ -1,0 +1,22 @@
+{
+  "name": "CodeGraph",
+  "description": "Indexes the codebase into a local knowledge graph your coding agent can query over MCP, so it can trace callers, dependencies, and the blast radius of a change across files.",
+  "kind": "extension",
+  "core": ">=9.0,<10",
+  "publisher": "ROBCOATVG",
+  "tags": [
+    "dev-tooling"
+  ],
+  "ignore": ".codegraph/\n",
+  "hooks": {
+    "init": "init.py",
+    "after-stage": {
+      "run": "hooks/sync.py",
+      "stages": [
+        "implement",
+        "converge"
+      ],
+      "budget": "30s"
+    }
+  }
+}
