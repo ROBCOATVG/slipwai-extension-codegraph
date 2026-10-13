@@ -186,7 +186,7 @@ def code_index():
     `__pycache__/` into the project beside it."""
     sys.dont_write_bytecode = True
     specification = importlib.util.spec_from_file_location(
-        "code_index", Path(__file__).resolve().parent / "agents/code_index.py")
+        "code_index", Path(__file__).resolve().parent.parent / "code_index.py")
     assert specification is not None and specification.loader is not None
     module = importlib.util.module_from_spec(specification)
     specification.loader.exec_module(module)

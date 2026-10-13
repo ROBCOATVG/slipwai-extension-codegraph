@@ -25,7 +25,11 @@ from pathlib import Path
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "agents"))
+# This package's own directory, for `code_index`. It was the toolkit's `scripts/agents/code_index.py` until
+# slice 6.1c took every extension's parts out of the keel; the import kept pointing there, so `./init
+# --extension codegraph` died at import with a ModuleNotFoundError before `main` could say anything — which
+# conformance saw as two obligations broken, the exit and the AGENTS.md block that never got written.
+sys.path.insert(0, str(Path(__file__).resolve().parent))
 from code_index import CODEGRAPH  # noqa: E402
 from guidance import record_extension, replace_block, write_project_mcp  # noqa: E402
 
