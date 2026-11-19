@@ -24,6 +24,8 @@ Never fails `./init`: a missing `codegraph` CLI is reported, not fatal.
 """
 from __future__ import annotations
 
+import json
+import os
 import shutil
 import subprocess
 import sys
@@ -72,6 +74,95 @@ MARKER_END = "<!-- extension:codegraph:end -->"
 SCRIPTS = "scripts" if DELIVERY == ROOT else f"{DELIVERY.relative_to(ROOT).as_posix()}/scripts"
 WRAPPER = f"{SCRIPTS}/codegraph"
 PACKAGE = f"{SCRIPTS}/extensions/codegraph"
+GUARD = f"{PACKAGE}/guards/ask_the_index.py"
+AGREE = f"python3 {SCRIPTS}/extensions/guards.py --elect codegraph"
+
+
+def guards_held() -> dict[str, list[str]]:
+    """Per harness installed here, the moments a guard holds at: what the keel hands a hook as
+    `SLIPWAI_GUARDS_HELD` at `init` and `project`, and what its `guard_harness.py --held` prints.
+
+    Both, because this module is read twice: run as a hook, with the variable, and imported by the drift check,
+    without it. They are one function of the project's files, so the block is the same either way. A keel that
+    has neither — one older than slipwai #121 — tells an extension nothing, and the answer is that nothing holds:
+    under it the guard is handed no search to judge and allows every one."""
+    try:
+        told = json.loads(os.environ["SLIPWAI_GUARDS_HELD"])
+    except (KeyError, ValueError):
+        try:
+            import guard_harness  # the toolkit's, beside `guidance` in `scripts/extensions/`
+            told = guard_harness.held()
+        except Exception:  # noqa: BLE001 — a keel without it, or a registry it cannot read: told nothing
+            told = {}
+    if not isinstance(told, dict):
+        return {}
+    return {key: [moment for moment in moments if isinstance(moment, str)]
+            for key, moments in told.items() if isinstance(key, str) and isinstance(moments, list)}
+
+
+def guard_agreed() -> bool:
+    """Whether a person has agreed to this extension's `before-search` guard here. Read, and never written: the
+    registry is the agreement, and `AGREE` is the command that gives one."""
+    try:
+        registry = json.loads((ROOT / ".slipwai/guards.json").read_text(encoding="utf-8"))
+        return any(isinstance(body, dict) and body.get("extension") == "codegraph"
+                   for body in registry["guards"]["before-search"])
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return False
+
+
+def harness_names() -> dict[str, str]:
+    """Each harness's own name, for a sentence a person reads: `Claude Code` and not `claude`."""
+    try:
+        registry = json.loads((DELIVERY / "scripts/agents/registry.json").read_text(encoding="utf-8"))
+        return {row["key"]: row["name"] for row in registry["harnesses"]
+                if isinstance(row.get("key"), str) and isinstance(row.get("name"), str)}
+    except (OSError, ValueError, KeyError, TypeError, AttributeError):
+        return {}
+
+
+def listed(names: list[str]) -> str:
+    return names[0] if len(names) == 1 else f"{', '.join(names[:-1])} and {names[-1]}"
+
+
+def what_holds_the_rule() -> str:
+    """The sentences that say what makes a session ask the index first — per harness, and only what is so.
+
+    A guard holds on a harness where the keel can run one before a search there **and** a person has agreed to
+    it. Where it could and nobody has, nothing refuses and the command that agrees is named. Where the harness
+    has no such moment, nothing can, and agreeing would change nothing there. 1.0.0 promised a hook on every
+    harness and 1.0.1 promised none; this says which it is, here."""
+    held, names = guards_held(), harness_names()
+    holding = sorted(names.get(key, key) for key, moments in held.items() if "before-search" in moments)
+    unseen = sorted(names.get(key, key) for key, moments in held.items()
+                    if "before-search" in moments and "tool-use" not in moments)
+    without = sorted(names.get(key, key) for key, moments in held.items() if "before-search" not in moments)
+    said: list[str] = []
+    if holding and guard_agreed():
+        said.append(
+            f"In {listed(holding)}, a guard this project agreed to (`{GUARD}`, at the keel's `before-search` "
+            "point) refuses a search of the source for a symbol — a Grep, or `grep`, `rg`, `ag`, `ack` or "
+            "`git grep` through the shell — from a session or a delegate that has not asked the index yet, and "
+            f"names the commands above. Once it has asked, through `{WRAPPER}` or over MCP, its searches are its "
+            "own. It never refuses a search of documents (`specs/`, `docs/`, `*.md`), of words, or for a file by "
+            "name, and it refuses nothing where the index is missing, unreadable or weeks unwritten.")
+        if unseen:
+            said.append(f"In {listed(unseen)} an ask over MCP is not shown to the guard, so ask once through "
+                        f"`{WRAPPER}`.")
+    elif holding:
+        said.append(
+            f"In {listed(holding)}, a guard can refuse a search of the source for a symbol until the session has "
+            "asked the index, but nobody has agreed to it here, so nothing refuses a search and asking the index "
+            f"first is the session's own to do. `{AGREE}` agrees to it, and `make agents` then rewrites this "
+            "paragraph.")
+    if without:
+        said.append(f"In {listed(without)}, nothing can refuse a search: the keel has no moment before one "
+                    "there, so asking the index first is the session's own to do.")
+    if not said:
+        said.append("No guard holds this here — asking the index first is the session's own to do.")
+    return "**What holds asking first.** " + " ".join(said)
+
+
 GUIDANCE = f"""
 {MARKER_BEGIN}
 ## CodeGraph
@@ -93,7 +184,9 @@ after each rung a `/cruise` captain runs, so the next rung asks an index that ha
 never fails a rung, and says so where it could not sync. `python3 {PACKAGE}/code_index.py health` opens the
 database, integrity-checks it, moves a corrupt one aside and rebuilds it (it is derived from the source and ignored
 by Git), and syncs a stale one: the repair by hand, and the step to take at the start of a session nothing has
-synced for. No hook refuses a text search — asking the index first is yours to do.
+synced for.
+
+{what_holds_the_rule()}
 
 **The connection travels with the checkout.** The project-scoped MCP file of every harness installed here
 names the server, started through `npx` at the same pinned version: `.mcp.json` for Claude Code (with
