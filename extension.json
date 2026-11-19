@@ -17,5 +17,14 @@
       "budget": "30s"
     },
     "check": "hooks/check.py"
+  },
+  "guards": {
+    "before-search": {
+      "run": "guards/ask_the_index.py",
+      "budget": "5s",
+      "sees": [
+        "mcp__codegraph__.*"
+      ]
+    }
   }
 }

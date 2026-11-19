@@ -15,24 +15,34 @@ So this script holds the index at the points the harness and the runner already 
     python3 scripts/extensions/codegraph/code_index.py sync     # a delegate came back; sync
     python3 scripts/extensions/codegraph/code_index.py guard    # a symbol search before the index: refuse it
 
-**Which of those something runs, as of 1.0.1.** `sync` is what the extension's `after-stage` hook does
-(`hooks/sync.py`, inside that point's budget), and `health` is what `make check-extensions` runs on a corrupt
-database before it judges one and what a person runs to repair an index by hand. `session` and `guard` were rows the
-keel's version 1 wrote into Claude Code's settings; the keel writes no extension's rows now, this package declares
-no guard in their place, and so nothing calls either — they are kept for the guard that would. `session` prints only
-what it did or could not do, since a hook's output lands in the session's context. The database is ignored by Git and derived from the source, so a corrupt one loses nothing by being moved
-aside (to `.codegraph/corrupt/`, the latest only) and rebuilt. `sync` keeps the index current while an iteration is
-still editing: after each delegate returns rather than on CodeGraph's watcher, because the watcher is what was off.
-`guard` refuses a search of the source for a symbol — the Grep tool, or `grep`, `rg`, `ag`, `ack`, `git grep` or a
-`sed -n '/pattern/p'` through the shell — from a session or a delegate that has not asked the index yet, and names
-the route that answers instead. A symbol is a name the index holds a definition for, or a name shaped like one
-(camelCase, PascalCase with a second hump, snake_case). Words and phrases are prose, and a search confined to
-documents is text search, which is right for them: `spec.md`, `decisions.md`, the PRD, `model.yaml`, a test's string.
-Once the agent has asked the index, its greps are its own business, and a search of another checkout — where the
-hook's `cwd`, a Grep `path` or a `cd` puts it outside this repository — is never this index's to answer.
+**Which of those something runs.** `sync` is what the extension's `after-stage` hook does (`hooks/sync.py`,
+inside that point's budget), and `health` is what `make check-extensions` runs on a corrupt database before it judges
+one and what a person runs to repair an index by hand. `guard` is the extension's `before-search` guard
+(`guards/ask_the_index.py`, declared in `extension.json`), which the keel runs before a search in a harness that
+can hold one, once a person has agreed to it. `session` was a row the keel's version 1 wrote into Claude Code's
+settings and nothing calls it now; it prints only what it did or could not do. The database is ignored by Git and
+derived from the source, so a corrupt one loses nothing by being moved aside (to `.codegraph/corrupt/`, the latest
+only) and rebuilt. `sync` keeps the index current while an iteration is still editing: after each rung rather than
+on CodeGraph's watcher, because the watcher is what was off.
+
+`guard` refuses a search of the source for a symbol — the Grep tool, or `grep`, `rg`, `ag`, `ack` or `git grep`
+through the shell — from a session or a delegate that has not asked the index yet, and names the route that
+answers instead. A symbol is a name the index holds a definition for, or a name shaped like one (camelCase,
+PascalCase with a second hump, snake_case). Words and phrases are prose, and a search confined to documents is text
+search, which is right for them: `spec.md`, `decisions.md`, the PRD, `model.yaml`, a test's string. Once the agent
+has asked the index — one of its MCP tools, which the guard is told about, or a query verb of `codegraph` through
+the shell — its greps are its own business, and a search of another checkout is never this index's to answer.
+
+**It reads the keel's contract and nothing else** (`docs/extensions.md`, *What a `before-search` guard is handed*):
+one JSON object on stdin naming the tool, the pattern, where it looks and whose call it is. What that object does not
+say the guard does not guess: handed no event at all — an older keel, which passes only the query — it cannot tell a
+Glob from a Grep or one session from the next, and allows. It runs no command and opens no connection, reads the
+index with two bounded queries, and allows wherever the index could not have answered: absent, unreadable, written
+too long ago to trust, or with no route to the CLI on this machine. Whatever it allows for a reason like those, it
+says on stderr.
 
 Every route here runs the version the MCP server runs (`CODEGRAPH`), so two versions never write one database.
-Standard library only, like every script the toolkit ships. Nothing here fails a command it hooks: a hook that
+Standard library only, like every script the toolkit ships. Nothing here fails a command it hooks: a guard that
 cannot decide allows the call.
 """
 from __future__ import annotations
@@ -45,6 +55,7 @@ import shutil
 import sqlite3
 import subprocess
 import sys
+import tempfile
 import time
 from pathlib import Path
 from typing import Any
@@ -78,8 +89,32 @@ INDEX_QUERY = re.compile(
     r"\bcodegraph(?:@[\w.-]+)?\s+(query|explore|context|node|files|callers|callees|impact|affected)\b")
 # How long a sync or a rebuild may take before the step gives up and says so.
 SYNC_SECONDS, BUILD_SECONDS = 120, 900
+# How long a read of the database may wait on a lock, for the guard: it is in front of somebody's tool call.
+READ_SECONDS = 1.0
 # The words a refusal starts with, which is how the stream shows where `guard` refused a call.
 REFUSED = "code-index: refused"
+# The exit code that refuses, at a guard point and nowhere else (the keel's `guards.py`, `REFUSE`).
+REFUSE = 2
+# The version of the keel's search event this reads. A field added is the same version; a meaning changed is not.
+EVENT_VERSION = 1
+# The most of an event, and of the record of who asked, that is read. A shell command can be any length, and a
+# guard that parsed megabytes in front of a tool call would be the thing its budget ends.
+EVENT_BYTES, RECORD_BYTES = 1_000_000, 1_000_000
+# How many askers the record keeps, newest first: sessions end and nothing tells this, so it is a window.
+ASKED_KEPT = 200
+# How many alternatives a pattern may name and still be a list of symbols rather than a regular expression.
+ALTERNATIVES = 16
+# How long since the index was last written before it is too old to hold anybody to. Not a measure of drift —
+# that is the gate's, which hashes the tree and takes seconds — only the cheap sign that no client has been
+# attached for weeks, when what the index would answer is about another codebase than the one being searched.
+STALE_DAYS = 14
+# The wrapper a refusal names, from the repository root: `scripts/` is three levels above this file.
+# And this script, for the repair an allowed search is told about.
+try:
+    WRAPPER = (SCRIPT.parents[2] / "codegraph").relative_to(ROOT).as_posix()
+    HEALTH = SCRIPT.relative_to(ROOT).as_posix()
+except ValueError:
+    WRAPPER, HEALTH = "scripts/codegraph", "scripts/extensions/codegraph/code_index.py"
 SEARCHERS = {"grep", "egrep", "fgrep", "rg", "ag", "ack"}
 # Documents, whose words a text search is right for: a search confined to these is never a symbol search.
 DOCUMENT = re.compile(r"(^|/)(docs|specs|\.specify)(/|$)|\.(md|mdx|txt|ya?ml|json|feature|csv|drawio|html)$")
@@ -283,21 +318,61 @@ def symbols(names: list[str]) -> set[str]:
     marks = ",".join("?" * len(names))
     for mode in ("mode=ro", "immutable=1"):  # the second for a WAL database with no `-shm`, as `damage()` says
         try:
-            with sqlite3.connect(f"{DATABASE.as_uri()}?{mode}", uri=True) as connection:
+            connection = sqlite3.connect(f"{DATABASE.as_uri()}?{mode}", uri=True, timeout=READ_SECONDS)
+            try:
                 return {row[0] for row in connection.execute(
                     f"SELECT DISTINCT name FROM nodes WHERE kind NOT IN ('file', 'import') AND name IN ({marks})",
                     names)}
+            finally:
+                connection.close()
         except sqlite3.Error:
             continue
     return set()
 
 
+def last_written() -> tuple[int, float | None]:
+    """How many files the index holds and when it last indexed one, in seconds; raises where it cannot be read."""
+    refused: sqlite3.Error | None = None
+    for mode in ("mode=ro", "immutable=1"):
+        try:
+            connection = sqlite3.connect(f"{DATABASE.as_uri()}?{mode}", uri=True, timeout=READ_SECONDS)
+            try:
+                count, newest = connection.execute("SELECT COUNT(*), MAX(indexed_at) FROM files").fetchone()
+            finally:
+                connection.close()
+            return int(count or 0), (float(newest) / 1000 if newest is not None else None)
+        except sqlite3.Error as error:
+            refused = error
+    assert refused is not None
+    raise refused
+
+
+def unusable() -> str | None:
+    """Why this index cannot be what a search is held to, or None. Offline, and two small reads at most."""
+    if not DATABASE.is_file():
+        return "there is no index here (`.codegraph/codegraph.db` is absent)"
+    try:
+        count, newest = last_written()
+    except (sqlite3.Error, OSError, ValueError, TypeError) as error:
+        return f"the index cannot be read ({type(error).__name__}: {error}); `python3 {HEALTH} health` repairs it"
+    if not count or newest is None:
+        return f"the index holds no file; `python3 {HEALTH} health` builds it"
+    if time.time() - newest > STALE_DAYS * 86400:
+        return (f"the index was last written on {time.strftime('%Y-%m-%d', time.localtime(newest))}, more than "
+                f"{STALE_DAYS} days ago; `python3 {HEALTH} health` brings it up to date")
+    if route() is None:
+        return f"nothing here can ask the index: {NO_ROUTE}"
+    return None
+
+
 def symbol_of(pattern: str) -> str | None:
     """The pattern as the symbol(s) it names, or None where it is words: every alternative must be one identifier,
     and each must be shaped like a symbol or be a name the index defines."""
+    if len(pattern) > 400:
+        return None
     stripped = re.sub(r"\\[bB<>]|[\^$()]|\\\(|\\\)", "", pattern)
     parts = [part for part in re.split(r"\\?\|", stripped) if part]
-    if not parts or not all(IDENTIFIER.fullmatch(part) for part in parts):
+    if not parts or len(parts) > ALTERNATIVES or not all(IDENTIFIER.fullmatch(part) for part in parts):
         return None
     known = symbols(parts)
     if all(SHAPED.search(part) or part in known for part in parts):
@@ -305,11 +380,18 @@ def symbol_of(pattern: str) -> str | None:
     return None
 
 
+def document(item: str) -> bool:
+    return bool(DOCUMENT.search(item.rstrip("/*").replace("**", "")) or DOCUMENT.search(item))
+
+
 def documents_only(paths: list[str], globs: list[str]) -> bool:
-    """A search confined to documents: every path and every include pattern names one, and at least one was given."""
-    named = [item for item in [*paths, *globs] if item]
-    return bool(named) and all(DOCUMENT.search(item.rstrip("/*").replace("**", "")) or DOCUMENT.search(item)
-                               for item in named)
+    """A search confined to documents: every path it names is one, or every file filter it carries is — `*.md`
+    confines a search to documents wherever it starts. A filter that excludes (`!*.md`) confines it to nothing."""
+    named = [item for item in paths if item]
+    filters = [item for item in globs if item]
+    if filters and all(not item.startswith("!") and document(item) for item in filters):
+        return True
+    return bool(named) and all(document(item) for item in named)
 
 
 def commands_of(command: str) -> list[list[list[str]]]:
@@ -350,12 +432,6 @@ def shell_searches(command: str) -> list[tuple[str, list[str], list[str], str]]:
             program = Path(words[0]).name
             if program == "git" and len(words) > 1 and words[1] == "grep":
                 program, words = "grep", words[1:]
-            if program == "sed":
-                scripts = [word for word in words[1:] if not word.startswith("-")]
-                address = re.match(r"^/((?:\\.|[^/])+)/", scripts[0]) if scripts else None
-                if address:
-                    found.append((address.group(1), scripts[1:], [], where))
-                continue
             if program not in SEARCHERS:
                 continue
             pattern, paths, globs, rest = None, [], [], words[1:]
@@ -404,7 +480,7 @@ def symbol_search(tool: str, given: dict[str, Any], cwd: str | None = None) -> s
         if documents_only([path], [str(glob)]) or outside(cwd, ".", [path] if path else []):
             return None
         return symbol_of(str(given.get("pattern", "")))
-    if tool == "Bash":
+    if tool != "Glob" and given.get("command"):
         for pattern, paths, globs, where in shell_searches(str(given.get("command", ""))):
             if documents_only(paths, globs) or outside(cwd, where, paths):
                 continue
@@ -414,61 +490,142 @@ def symbol_search(tool: str, given: dict[str, Any], cwd: str | None = None) -> s
 
 
 def index_query(tool: str, given: dict[str, Any]) -> bool:
-    return tool.startswith("mcp__codegraph__") or (tool == "Bash" and bool(INDEX_QUERY.search(str(given.get("command", "")))))
+    return tool.startswith(INDEX_TOOLS) or bool(INDEX_QUERY.search(str(given.get("command", ""))))
 
 
-# --- the hooks ------------------------------------------------------------------------------------------------------
+# --- the guard ------------------------------------------------------------------------------------------------------
+
+# The index's own tools as a harness names them: what the manifest's guard declares it `sees`.
+INDEX_TOOLS = "mcp__codegraph__"
+# What an event names that this rule reads, each a string or absent. Anything else in it is not read.
+READ = ("point", "tool", "pattern", "path", "glob", "type", "command", "cwd", "session", "agent")
 
 
-def event() -> dict[str, Any]:
+def told() -> dict[str, Any] | None:
+    """The event the keel wrote to stdin, or None where there is none: a terminal, nothing, or not one object."""
     try:
-        read = json.loads(sys.stdin.read() or "{}")
+        if sys.stdin is None or sys.stdin.isatty():
+            return None
+        raw = sys.stdin.buffer.read(EVENT_BYTES + 1)
+    except (OSError, ValueError):
+        return None
+    if len(raw) > EVENT_BYTES:
+        return None
+    try:
+        read = json.loads(raw.decode("utf-8", "replace") or "null")
     except ValueError:
-        return {}
-    return read if isinstance(read, dict) else {}
+        return None
+    return read if isinstance(read, dict) else None
 
 
-def asker(happened: dict[str, Any]) -> str:
+def said(event: dict[str, Any]) -> dict[str, str]:
+    """The fields this rule reads, where the event says them. A field that is absent, empty or not text is absent:
+    the keel leaves out what a search did not name, and a value of another kind is not one it promised."""
+    return {word: event[word] for word in READ if isinstance(event.get(word), str) and event[word].strip()}
+
+
+def asker(event: dict[str, str]) -> str:
     """Whose call this is: the session, and the delegate inside it where there is one."""
-    return f"{happened.get('session_id', '?')}:{happened.get('agent_id') or 'host'}"
+    return f"{event['session']}:{event.get('agent') or 'host'}"
 
 
 def load_asked() -> dict[str, float]:
+    """Who has asked the index, and when. Anything but a sound record is nobody: a corrupt file, one that cannot
+    be read, or one too large to be this script's is not evidence that anybody asked."""
     try:
-        read = json.loads(ASKED.read_text(encoding="utf-8"))
+        with ASKED.open("rb") as record:
+            raw = record.read(RECORD_BYTES + 1)
+        read = json.loads(raw.decode("utf-8")) if len(raw) <= RECORD_BYTES else None
     except (OSError, ValueError):
         return {}
-    return read if isinstance(read, dict) else {}
+    if not isinstance(read, dict):
+        return {}
+    return {who: float(when) for who, when in read.items()
+            if isinstance(who, str) and isinstance(when, (int, float)) and not isinstance(when, bool)}
+
+
+def record_asked(who: str) -> str | None:
+    """Write down that `who` asked the index; why it could not be written, or None. Whole or not at all: the
+    record is written beside itself and moved into place, so a guard ended half way leaves the last sound one."""
+    if not DIRECTORY.is_dir():
+        return "there is no `.codegraph/` here to keep the record in"
+    asked = load_asked()
+    asked[who] = time.time()
+    kept = dict(sorted(asked.items(), key=lambda pair: pair[1])[-ASKED_KEPT:])
+    written: str | None = None
+    try:
+        handle, written = tempfile.mkstemp(dir=DIRECTORY, prefix="asked.", suffix=".tmp")
+        with os.fdopen(handle, "w", encoding="utf-8") as record:
+            record.write(json.dumps(kept) + "\n")
+        os.replace(written, ASKED)
+    except OSError as error:
+        if written is not None:
+            try:
+                os.unlink(written)
+            except OSError:
+                pass
+        return f"{type(error).__name__}: {error}"
+    return None
+
+
+def allowed(why: str) -> int:
+    """Allow the call and say why, where the why is something a person would want to know."""
+    print(f"code-index: allowed — {why}", file=sys.stderr)
+    return 0
+
+
+def noted(who: str) -> int:
+    problem = record_asked(who)
+    return allowed(f"this ask of the index could not be recorded ({problem}), so the next symbol search is "
+                   "refused once more") if problem else 0
 
 
 def guard() -> int:
-    """Refuse a symbol search of the source from whoever has not asked the index yet; record who has."""
-    happened = event()
-    tool = str(happened.get("tool_name", ""))
-    given = happened.get("tool_input") if isinstance(happened.get("tool_input"), dict) else {}
-    if not DATABASE.is_file() or route() is None:
-        return 0
-    asked = load_asked()
-    who = asker(happened)
-    if index_query(tool, given):
-        asked[who] = time.time()
-        try:
-            ASKED.write_text(json.dumps(dict(sorted(asked.items(), key=lambda pair: pair[1])[-200:])) + "\n", encoding="utf-8")
-        except OSError:
-            pass
-        return 0
-    if who in asked:
-        return 0
-    symbol = symbol_search(tool, given, str(happened.get("cwd") or "") or None)
+    """Refuse a symbol search of the source from whoever has not asked the index yet; record who has.
+
+    One script at two moments, as the keel's contract has it: told at `tool-use` that one of the index's own tools
+    is being used, where what this exits with is discarded, and asked at `before-search` about one search. Returns
+    `REFUSE` at the second and only there. Every other path returns 0, and says why where the reason is that it
+    could not tell or that the index could not have answered."""
+    event = told()
+    if event is None:
+        return allowed("cannot judge this search: the keel handed no event on stdin, so nothing says which tool "
+                       "made it, where it looks or whose it is (a keel older than the one this guard was written "
+                       "for hands only the query)")
+    if event.get("v") != EVENT_VERSION:
+        return allowed(f"cannot judge this search: the event's `v` is {event.get('v')!r}, and this guard reads "
+                       f"version {EVENT_VERSION} of the keel's search event")
+    given = said(event)
+    point = given.get("point") or os.environ.get("SLIPWAI_POINT", "")
+    if point == "tool-use":
+        if not given.get("tool", "").startswith(INDEX_TOOLS):
+            return 0
+        if "session" not in given:
+            return allowed("cannot record this ask: the event names no `session`, so nothing says whose it is")
+        return noted(asker(given))
+    if point != "before-search":
+        return allowed(f"cannot judge: this guard answers at `before-search`, and was run at {point or 'no point'}")
+    for needed, why in (("tool", "which tool made the search"), ("session", "whose search it is"),
+                        ("cwd", "where the search runs")):
+        if needed not in given:
+            return allowed(f"cannot judge this search: the event names no `{needed}`, so nothing says {why}")
+    tool = given["tool"]
+    if "command" in given and index_query(tool, given):
+        return noted(asker(given))
+    symbol = symbol_search(tool, given, given["cwd"])
     if symbol is None:
         return 0
+    if asker(given) in load_asked():
+        return 0
+    reason = unusable()
+    if reason is not None:
+        return allowed(reason)
     first = symbol.split("|")[0]
-    print(f"{REFUSED}: `{symbol}` is a symbol, and this repository's code index answers who calls it, what it calls "
-          f"and what a change to it reaches. Ask it first: `scripts/codegraph callers {first}`, `scripts/codegraph "
-          f"impact {first}` or `scripts/codegraph explore {first}` through the shell, or the codegraph_explore tool. "
-          "A text search is for words in documents — spec.md, decisions.md, model.yaml, a test's string — and once "
-          "the index has been asked in this context a search for a symbol is allowed too.", file=sys.stderr)
-    return 2
+    print(f"{REFUSED} — `{symbol}` is a symbol, and this session has not asked the code index yet. Ask it first: "
+          f"`{WRAPPER} callers {first}`, `{WRAPPER} impact {first}` or `{WRAPPER} explore {first}` "
+          "(or the codegraph_explore tool).\nAfter that a symbol search is allowed; a search of documents "
+          "(`specs/`, `docs/`, `*.md`), of words, or for a file by name always is.", file=sys.stderr)
+    return REFUSE
 
 
 def sync() -> int:
