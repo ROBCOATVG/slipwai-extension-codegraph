@@ -26,6 +26,21 @@ permissions:
   contents: write
 
 jobs:
+  # What this package promises a project, run in a scratch one: every hook `extension.json` declares is a file
+  # here and fires through the toolkit's own `hooks.py`, the `AGENTS.md` block names only what `./init` leaves
+  # behind, `make agents` rewrites a drifted block and installs nothing. Conformance below holds the six
+  # obligations every extension owes; none of them is about a path a page names.
+  tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v6
+      - uses: actions/setup-python@v6
+        with:
+          python-version: '3.11'
+      # The same keel conformance is proved against: the tests take the toolkit's `scripts/` from it.
+      - run: python -m pip install --disable-pip-version-check 'git+https://github.com/ROBCOATVG/slipwai_v2_Fork@main'
+      - run: python -m unittest discover -s tests -v
+
   conformance:
     uses: ROBCOATVG/slipwai_v2_Fork/.github/workflows/package.yml@main
     with:

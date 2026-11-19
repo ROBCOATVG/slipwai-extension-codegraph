@@ -24,7 +24,7 @@ the last moment a client was attached, and that is the number that says *why* it
 Two more things make it worth running before it judges. A database that does not pass SQLite's
 integrity check is never a pass: CodeGraph's own `status` and `sync` report a malformed index as
 up to date, and only a query finds out. Where the pinned CLI is reachable
-(`scripts/agents/code_index.py`), a corrupt database is moved aside and rebuilt, and an index
+(`code_index.py`, `route`), a corrupt database is moved aside and rebuilt, and an index
 behind the tree is synced, before it is compared — the database is derived from the source and
 ignored by Git — so the gate fails only where the index cannot be made sound and current: the
 tooling absent, or the rebuild or sync not taking, which is the state it exists to report.
@@ -62,6 +62,20 @@ def project_root(script: Path, depth: int) -> Path:
 
 ROOT = project_root(Path(__file__).resolve(), 1)
 INDEX = ROOT / ".codegraph/codegraph.db"
+PACKAGE = Path(__file__).resolve().parents[1]
+# The command `AGENTS.md` tells every agent to run, which `./init --extension codegraph` writes and Git tracks.
+WRAPPER = PACKAGE.parents[1] / "codegraph"
+
+
+def shown(path: Path) -> str:
+    """A path as a person in this repository would type it."""
+    try:
+        return path.relative_to(ROOT).as_posix()
+    except ValueError:
+        return str(path)
+
+
+HEALTH = shown(PACKAGE / "code_index.py")
 # How many offending paths to name before summarising the rest: enough to recognise the shape of
 # what is missing, short enough that the gate's output stays readable.
 LISTED = 8
@@ -182,7 +196,7 @@ def drift() -> tuple[dict[str, tuple[str, float]], list[str], list[str]] | None:
 
 
 def code_index():
-    """`scripts/agents/code_index.py`, loaded: the pinned route, the integrity check, the sync — without writing a
+    """The extension's `code_index.py`, loaded: the pinned route, the integrity check, the sync — without writing a
     `__pycache__/` into the project beside it."""
     sys.dont_write_bytecode = True
     specification = importlib.util.spec_from_file_location(
@@ -193,7 +207,26 @@ def code_index():
     return module
 
 
+def wrapper() -> str | None:
+    """Why the command the guidance names cannot be run here, or None.
+
+    1.0.0 named `scripts/codegraph` in `AGENTS.md` and nothing wrote it, so a delegate that followed the page ran
+    a file that was not there and nothing went red. A project that elected this extension before 1.0.1 is in that
+    state until the wrapper is written, and the block is rewritten to name it on the next `make agents`.
+    """
+    if WRAPPER.is_file() and os.access(WRAPPER, os.X_OK):
+        return None
+    state = "is not executable" if WRAPPER.is_file() else "is not here"
+    return (f"check-codegraph: {shown(WRAPPER)} {state}, and AGENTS.md tells every agent to ask the index "
+            f"with it. `python3 {shown(PACKAGE / 'wrapper.py')}` writes it — that installs and indexes nothing — "
+            "and it is a tracked file: commit it")
+
+
 def main() -> int:
+    missing = wrapper()
+    if missing:
+        print(missing, file=sys.stderr)
+        return 1
     if not INDEX.is_file():
         print("check-codegraph: no .codegraph/ — this project carries no code index; nothing to "
               "check")
@@ -218,8 +251,7 @@ def main() -> int:
         print(f"check-codegraph: .codegraph/codegraph.db fails SQLite's integrity check ({problem}). "
               "CodeGraph's own `status` and `sync` do not notice this; its queries fail. The database is "
               "derived from the source and ignored by Git, so nothing is lost by rebuilding it: "
-              "`python3 scripts/agents/code_index.py health` moves it aside and rebuilds it (a /cruise "
-              "runner does that before every iteration)", file=sys.stderr)
+              f"`python3 {HEALTH} health` moves it aside and rebuilds it", file=sys.stderr)
         return 1
     if indexed() is None:
         print("check-codegraph: .codegraph/codegraph.db does not carry the `files` table this "

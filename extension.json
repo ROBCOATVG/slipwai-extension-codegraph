@@ -11,12 +11,9 @@
   "ignore": ".codegraph/\n",
   "hooks": {
     "init": "init.py",
+    "project": "hooks/project.py",
     "after-stage": {
       "run": "hooks/sync.py",
-      "stages": [
-        "implement",
-        "converge"
-      ],
       "budget": "30s"
     },
     "check": "hooks/check.py"
