@@ -212,7 +212,8 @@ def wrapper() -> str | None:
 
     1.0.0 named `scripts/codegraph` in `AGENTS.md` and nothing wrote it, so a delegate that followed the page ran
     a file that was not there and nothing went red. A project that elected this extension before 1.0.1 is in that
-    state until the wrapper is written, and the block is rewritten to name it on the next `make agents`.
+    state until the next `make agents` or `slipwai migrate`, where `hooks/project.py` writes the wrapper and
+    rewrites the block. This is for what is left: a wrapper somebody deleted, or a path somebody else's file holds.
     """
     if WRAPPER.is_file() and os.access(WRAPPER, os.X_OK):
         return None

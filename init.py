@@ -17,8 +17,8 @@ before anything that needs the CLI: the wrapper reaches the index through `npx`,
 extension is elected, installed CLI or not.
 See docs/extensions.md for what every extension's `init.py` owes.
 
-`make agents` does not run this: the `project` point is `hooks/project.py`, which rewrites the block and installs
-nothing.
+`make agents` does not run this: the `project` point is `hooks/project.py`, which rewrites the block, writes the
+wrapper where it is missing, and installs nothing.
 
 Never fails `./init`: a missing `codegraph` CLI is reported, not fatal.
 """

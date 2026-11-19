@@ -10,7 +10,7 @@ Release notes, newest first, one entry per released version; the entry being wri
 
 **`hooks/sync.py` ships.** `extension.json` has declared it at `after-stage` since 1.0.0 and the package did not carry it, so the toolkit reported *not in this project* after every rung and nothing synced. It syncs the index inside the point's 30s budget, exits 0 whatever happened, and says what it could not do. The declaration no longer names `implement` and `converge`: a captain fires `after-stage` for the rungs it runs, `drive` and `decide`, so a hook asking for those two stages was never called.
 
-**`make agents` rewrites a drifted block, and installs nothing.** The package declared no `project` hook, so that point fell to `init.py`, which installs CodeGraph and indexes the repository — or, where the CLI is missing, stops before the block. `hooks/project.py` rewrites the block from `GUIDANCE` and does nothing else.
+**`make agents` rewrites a drifted block and writes the wrapper, and installs nothing.** The package declared no `project` hook, so that point fell to `init.py`, which installs CodeGraph and indexes the repository — or, where the CLI is missing, stops before the block. `hooks/project.py` rewrites the block from `GUIDANCE` and writes `scripts/codegraph` where it is missing or an older copy. So a project that elected 1.0.0 and takes this version through `slipwai migrate` or `make agents` has the wrapper without anybody running a command, and the gate that now asks for it passes. The wrapper is a tracked file: commit it.
 
 ## 1.0.0
 

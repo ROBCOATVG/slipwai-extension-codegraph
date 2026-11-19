@@ -27,7 +27,7 @@ Then, in a project:
 | `bin/codegraph` | The source of `scripts/codegraph`, the wrapper the `AGENTS.md` block names: the pinned CLI through `npx` or an installed `codegraph` |
 | `wrapper.py` | Writes that wrapper into the project, executable, and nothing else; the repair the gate names |
 | `code_index.py` | The pin, the route to the CLI, the integrity check, `health` and `sync` |
-| `hooks/project.py` | The `project` point (`make agents`, `slipwai migrate`): rewrites the `AGENTS.md` block and installs nothing |
+| `hooks/project.py` | The `project` point (`make agents`, `slipwai migrate`): rewrites the `AGENTS.md` block, writes `scripts/codegraph` where it is missing, and installs nothing |
 | `hooks/sync.py` | The `after-stage` point: syncs the index after a rung, inside its 30s budget, and never fails one |
 | `hooks/check.py` | The `check` point (`make check-extensions`): fails on an index that cannot be made sound and current, or a missing wrapper |
 | `tests/` | What the package promises a project, run in a scratch one: `python -m unittest discover -s tests` |

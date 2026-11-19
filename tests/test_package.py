@@ -316,9 +316,32 @@ class TheProjectHook(ScratchProject):
         self.project.stand_in()
         run = self.project.fire("project", tool=True)
         self.assertEqual(run.returncode, 0)
-        self.assertEqual(self.project.called(), [])
-        self.assertFalse((self.project.root / "scripts/codegraph").exists())
+        self.assertEqual(self.project.called(), [], "a re-projection ran the CLI")
         self.assertFalse((self.project.root / ".codegraph").exists())
+
+    def test_a_project_that_elected_1_0_0_is_green_after_it_with_no_command_run_by_anyone(self) -> None:
+        """What an upgrade is: the package's files replaced, `make agents` or `slipwai migrate` firing this point,
+        and then the gate. 1.0.0 wrote no wrapper, so the gate would refuse the project it had just upgraded."""
+        wrapper = self.project.root / "scripts/codegraph"
+        self.assertFalse(wrapper.exists())
+        self.assertEqual(self.project.fire("check", "--fatal").returncode, 1, "the state an upgrade starts from")
+        self.project.stand_in()
+        run = self.project.fire("project", tool=True)
+        self.assertEqual(run.returncode, 0)
+        self.assertIn("scripts/codegraph", run.stdout)
+        self.assertTrue(os.access(wrapper, os.X_OK))
+        self.assertEqual(self.project.called(), [], "writing the wrapper ran the CLI")
+        self.assertIn(self.project.canonical(), self.project.agents())
+        gate = self.project.fire("check", "--fatal")
+        self.assertEqual(gate.returncode, 0, gate.stderr)
+
+    def test_it_leaves_somebody_elses_file_at_that_path_and_says_so(self) -> None:
+        theirs = self.project.root / "scripts/codegraph"
+        theirs.write_text("#!/bin/sh\necho mine\n", encoding="utf-8")
+        run = self.project.fire("project")
+        self.assertEqual(run.returncode, 0, "a hook reports; it never fails what fired it")
+        self.assertEqual(theirs.read_text(encoding="utf-8"), "#!/bin/sh\necho mine\n")
+        self.assertIn("left alone", run.stdout + run.stderr)
 
 
 @needs_toolkit
