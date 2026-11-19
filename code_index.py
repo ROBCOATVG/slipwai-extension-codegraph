@@ -10,15 +10,17 @@ which delegate asked it. Each of those is a place a sentence in a brief was the 
 
 So this script holds the index at the points the harness and the runner already own:
 
-    python3 scripts/agents/code_index.py health   # open it, integrity-check it, rebuild a corrupt one, sync a stale one
-    python3 scripts/agents/code_index.py session  # Claude Code's SessionStart hook: `health`, said only when it acted
-    python3 scripts/agents/code_index.py sync     # Claude Code's PostToolUse hook: a delegate came back; sync
-    python3 scripts/agents/code_index.py guard    # Claude Code's PreToolUse hook: a symbol search before the index
+    python3 scripts/extensions/codegraph/code_index.py health   # open it, integrity-check it, rebuild a corrupt one, sync a stale one
+    python3 scripts/extensions/codegraph/code_index.py session  # `health`, said only when it acted
+    python3 scripts/extensions/codegraph/code_index.py sync     # a delegate came back; sync
+    python3 scripts/extensions/codegraph/code_index.py guard    # a symbol search before the index: refuse it
 
-`health` is what `scripts/agents/cruise.py` runs before every iteration, what `make check-extensions` runs on a corrupt
-database before it judges one, and what a person runs to repair an index by hand. `session` is the same step at the
-start of a Claude Code session — a person's `/drive` has no runner in front of it — and prints only what it did or
-could not do, since a hook's output lands in the session's context. The database is ignored by Git and derived from the source, so a corrupt one loses nothing by being moved
+**Which of those something runs, as of 1.0.1.** `sync` is what the extension's `after-stage` hook does
+(`hooks/sync.py`, inside that point's budget), and `health` is what `make check-extensions` runs on a corrupt
+database before it judges one and what a person runs to repair an index by hand. `session` and `guard` were rows the
+keel's version 1 wrote into Claude Code's settings; the keel writes no extension's rows now, this package declares
+no guard in their place, and so nothing calls either — they are kept for the guard that would. `session` prints only
+what it did or could not do, since a hook's output lands in the session's context. The database is ignored by Git and derived from the source, so a corrupt one loses nothing by being moved
 aside (to `.codegraph/corrupt/`, the latest only) and rebuilt. `sync` keeps the index current while an iteration is
 still editing: after each delegate returns rather than on CodeGraph's watcher, because the watcher is what was off.
 `guard` refuses a search of the source for a symbol — the Grep tool, or `grep`, `rg`, `ag`, `ack`, `git grep` or a

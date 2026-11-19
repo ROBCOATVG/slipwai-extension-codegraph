@@ -1,0 +1,39 @@
+#!/usr/bin/env python3
+"""`scripts/codegraph <verb> …`: the code index's CLI by a route that exists wherever a shell and Node do.
+
+The one command a brief, a refusal and a person can name without first finding out which of CodeGraph's routes this
+session has: the MCP tool may arrive deferred, the `codegraph` binary is usually not installed, and `npx` needs the
+package spelled with the version the MCP server runs. This runs that pinned version (`CODEGRAPH`, in the extension's
+`code_index.py`) through `npx`, or an installed `codegraph` where there is no Node, from the repository root:
+
+    scripts/codegraph callers decideCue          # who calls it
+    scripts/codegraph impact decideCue           # what a change to it reaches
+    scripts/codegraph explore "decideCue submitCue"   # the source of both and the path between them
+    scripts/codegraph sync                       # bring the index up to the tree
+
+Written here by `./init --extension codegraph` from the extension's `bin/codegraph`, and written again by it: change
+the package, not this copy.
+"""
+import os
+import sys
+from pathlib import Path
+
+sys.dont_write_bytecode = True
+HERE = Path(__file__).resolve().parent
+# Beside `extensions/` where `./init` wrote it; one directory above `code_index.py` where it is the package's own.
+PACKAGE = next((place for place in (HERE / "extensions/codegraph", HERE.parent)
+                if (place / "code_index.py").is_file()), None)
+if PACKAGE is None:
+    sys.exit("scripts/codegraph: the codegraph extension's files are not in this project "
+             f"({HERE / 'extensions/codegraph'}), so the index cannot be asked here; `slipwai migrate` brings them "
+             "back, and say that the answer you give instead is a text search")
+sys.path.insert(0, str(PACKAGE))
+from code_index import NO_ROUTE, ROOT, route  # noqa: E402
+
+command = route()
+if command is None:
+    sys.exit(f"scripts/codegraph: {NO_ROUTE}. The index cannot be asked here; install Node (or put the one you have "
+             "on PATH), and say that the answer you give instead is a text search")
+os.chdir(ROOT)
+os.environ.setdefault("CODEGRAPH_NO_UPDATE_CHECK", "1")
+os.execvp(command[0], [*command, *sys.argv[1:]])
